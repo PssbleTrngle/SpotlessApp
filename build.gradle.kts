@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.ktor)
     alias(libs.plugins.kotlin.plugin.serialization)
+    alias(libs.plugins.spotless)
     idea
 }
 
@@ -31,5 +32,16 @@ dependencies {
 idea {
     module {
         excludeDirs.add(file("data"))
+    }
+}
+
+spotless {
+    kotlin {
+        ktlint()
+        leadingTabsToSpaces()
+    }
+
+    kotlinGradle {
+        ktlint()
     }
 }
