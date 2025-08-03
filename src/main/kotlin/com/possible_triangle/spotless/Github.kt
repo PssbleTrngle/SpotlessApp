@@ -24,15 +24,15 @@ import java.time.Instant
 typealias Id = Long
 
 @Serializable
-enum class AuthorAssociation {
-    COLLABORATOR,
-    CONTRIBUTOR,
-    FIRST_TIMER,
-    FIRST_TIME_CONTRIBUTOR,
-    MANNEQUIN,
-    MEMBER,
-    NONE,
-    OWNER,
+enum class AuthorAssociation(val canRunCommand: Boolean) {
+    COLLABORATOR(true),
+    CONTRIBUTOR(false),
+    FIRST_TIMER(false),
+    FIRST_TIME_CONTRIBUTOR(false),
+    MANNEQUIN(false),
+    MEMBER(true),
+    NONE(false),
+    OWNER(true),
 }
 
 @Serializable
@@ -66,6 +66,7 @@ data class Head(
 @Serializable
 data class PullRequest(
     val url: String,
+    val number: Id,
     val head: Head,
     val base: Head,
     @SerialName("author_association")
@@ -182,8 +183,9 @@ suspend fun Application.handleComment(event: IssueCommentEvent) {
     if (event.issue.pr == null) return
     log.debug("Received PR comment '${event.comment.body}' on ${event.issue.pr.url}")
 
-    if (!event.shouldRun()) return log.debug(" not a command")
-    if (event.issue.state != IssueState.OPEN) return log.debug(" already closed")
+    if (!event.shouldRun()) return log.debug("not a command")
+    if (event.issue.state != IssueState.OPEN) return log.debug("already closed")
+    if (!event.comment.authorAssociation.canRunCommand) return log.debug("user not allowed to run command")
 
     val jwt = generateJWT()
 
@@ -203,9 +205,9 @@ suspend fun Application.handleComment(event: IssueCommentEvent) {
     react(event.comment, event.repository, user, Emoji.EYES)
 
     launch(Dispatchers.IO) {
-        val reference = "${event.repository.name}/${pullRequest.head.ref}"
+        val reference = "${event.repository.name} #${pullRequest.number}"
         try {
-            val committed = spotlessApply(event.repository, pullRequest.head, user)
+            val committed = spotlessApply(pullRequest.head, user)
             if (committed) {
                 react(event.comment, event.repository, user, Emoji.THUMBS_UP)
                 log.info("done for $reference")

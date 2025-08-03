@@ -15,9 +15,9 @@ data class GitUser(
     val token: String,
 )
 
-fun Head.clone(repository: Repository, destination: File, user: GitUser) {
+fun Head.clone(destination: File, user: GitUser) {
     try {
-        val cloneUrl = Url(URLBuilder(repository.cloneUrl).apply {
+        val cloneUrl = Url(URLBuilder(repo.cloneUrl).apply {
             this.user = user.name
             this.password = user.token
         })
@@ -62,7 +62,6 @@ fun commitAndPush(directory: File, user: GitUser): Boolean {
             command("git", listOf("commit", "-m", "run spotless", "--no-verify"))
 
             git.push()
-
         }
 
         return true

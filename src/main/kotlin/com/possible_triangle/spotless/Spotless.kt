@@ -18,8 +18,8 @@ data class Metadata(
     val clonedAt: Instant
 )
 
-suspend fun Application.spotlessApply(repository: Repository, head: Head, user: GitUser): Boolean = coroutineScope {
-    val dir = CLONE_DIR.resolve(repository.name).resolve(head.ref)
+suspend fun Application.spotlessApply(head: Head, user: GitUser): Boolean = coroutineScope {
+    val dir = CLONE_DIR.resolve(head.repo.name).resolve(head.ref)
     val destination = dir.resolve("repository")
     val metaFile = dir.resolve("meta.json")
 
@@ -49,8 +49,8 @@ suspend fun Application.spotlessApply(repository: Repository, head: Head, user: 
     )
 
     val result = runCatching {
-        log.info("cloning into ${repository.cloneUrl}")
-        head.clone(repository, destination, user)
+        log.info("cloning into ${head.repo.cloneUrl}, branch ${head.ref}")
+        head.clone( destination, user)
 
         log.info("running spotlessApply")
         runGradle(destination)
@@ -64,7 +64,7 @@ suspend fun Application.spotlessApply(repository: Repository, head: Head, user: 
 }
 
 fun Application.cleanup() {
-    if (CLONE_DIR.list()?.isNotEmpty() != false) return
+    if (CLONE_DIR.list() == null || CLONE_DIR.list().isEmpty()) return;
 
     log.warn("deleting headless data")
 

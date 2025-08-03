@@ -1,0 +1,10 @@
+services:
+  app:
+    build:
+      context: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - "./private-key.pem:/app/private-key.pem"
+    env_file:
+      - .env.local
