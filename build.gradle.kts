@@ -38,7 +38,10 @@ idea {
 spotless {
     kotlin {
         ktlint()
+
         leadingTabsToSpaces()
+
+        suppressLintsFor { shortCode = "standard:package-name" }
     }
 
     kotlinGradle {
