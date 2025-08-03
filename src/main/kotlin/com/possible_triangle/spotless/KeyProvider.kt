@@ -10,7 +10,7 @@ import java.security.spec.PKCS8EncodedKeySpec
 
 fun Application.createKeyProvider(): RSAKeyProvider {
     val privateKeyFile = File("private-key.pem")
-    if (!privateKeyFile.exists()) error("${privateKeyFile.name} missing")
+    if (!privateKeyFile.exists()) error("${privateKeyFile.absolutePath} missing")
 
     val base64 = privateKeyFile
         .readText()

@@ -5,10 +5,12 @@ WORKDIR /home/gradle/src
 
 RUN gradle buildFatJar --no-daemon
 
-FROM amazoncorretto:22 as runtime
+FROM amazoncorretto:22-alpine as runtime
 
-RUN mkdir /app
-COPY --from=build /home/gradle/src/build/libs/*.jar /app/server.jar
+RUN apk add --no-cache git
+
+WORKDIR /app
+COPY --from=build /home/gradle/src/build/libs/*.jar server.jar
 
 EXPOSE 8080
-ENTRYPOINT ["java","-jar","/app/server.jar"]
+ENTRYPOINT ["java","-jar","server.jar"]
