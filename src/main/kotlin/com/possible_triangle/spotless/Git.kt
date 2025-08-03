@@ -1,67 +1,27 @@
 package com.possible_triangle.spotless
 
+import com.lordcodes.turtle.ShellRunException
+import com.lordcodes.turtle.ShellScript
 import com.lordcodes.turtle.shellRun
-import io.ktor.server.application.Application
-import io.ktor.server.application.log
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.serialization.Contextual
-import kotlinx.serialization.Serializable
+import io.ktor.http.URLBuilder
+import io.ktor.http.Url
+import io.ktor.server.engine.applicationEnvironment
 import java.io.File
-import java.lang.Exception
-import java.time.Instant
+import java.lang.RuntimeException
 
-private val CLONE_DIR = File("data/clones")
-
-private val JSON = createJson()
-
-@Serializable
-data class Metadata(
-    val sha: String,
-    @Contextual
-    val clonedAt: Instant
+data class GitUser(
+    val email: String,
+    val name: String,
+    val token: String,
 )
 
-suspend fun Application.spotlessApply(url: String, head: Head) = coroutineScope {
-    val dir = CLONE_DIR.resolve(head.ref)
-    val destination = dir.resolve("repository")
-    val metaFile = dir.resolve("meta.json")
-
-    if (dir.exists()) {
-        val metadata = JSON.decodeFromString<Metadata>(metaFile.readText())
-        error("already checked out with ${metadata.sha}")
-    }
-
-    dir.mkdirs()
-    metaFile.writeText(
-        JSON.encodeToString(
-            Metadata(
-                sha = head.sha,
-                clonedAt = Instant.now()
-            )
-        )
-    )
-
-    val result = runCatching {
-        log.info("cloning into $url")
-        head.clone(url, destination)
-
-        log.info("running spotlessApply")
-        runGradle(destination)
-
-        log.info("committing and pushing changes")
-        commitAndPush(destination)
-    }
-
-    dir.deleteRecursively()
-
-    result.exceptionOrNull()?.let {
-        log.error("exception occured while handling $url", it)
-    }
-}
-
-private fun Head.clone(url: String, destination: File) {
+fun Head.clone(repository: Repository, destination: File, user: GitUser) {
     try {
+        val cloneUrl = Url(URLBuilder(repository.cloneUrl).apply {
+            this.user = user.name
+            this.password = user.token
+        })
+
         shellRun(
             "git", listOf(
                 "clone",
@@ -69,7 +29,7 @@ private fun Head.clone(url: String, destination: File) {
                 ref,
                 "--depth",
                 "1",
-                url,
+                cloneUrl.toString(),
                 destination.absolutePath
             )
         )
@@ -79,10 +39,36 @@ private fun Head.clone(url: String, destination: File) {
     }
 }
 
-private fun commitAndPush(directory: File) {
-    shellRun(dryRun = true) {
-        changeWorkingDirectory(directory)
-        git.commitAllChanges("run spotless")
-        git.push()
+fun ShellScript.gitConfig(key: String, value: String) {
+    command("git", listOf("config", "--local", key, value))
+
+}
+
+class UnchangedException() : RuntimeException("no git changes found")
+
+fun commitAndPush(directory: File, user: GitUser): Boolean {
+    try {
+        shellRun {
+            changeWorkingDirectory(directory)
+
+            gitConfig("user.name", user.name)
+            gitConfig("user.email", user.email)
+            gitConfig("commit.gpgsign", "false")
+
+            val status = command("git", listOf("status", "--porcelain")).trim()
+            if (status.isEmpty()) throw UnchangedException()
+
+            git.addAll()
+            command("git", listOf("commit", "-m", "run spotless", "--no-verify"))
+
+            git.push()
+
+        }
+
+        return true
+    } catch (_: UnchangedException) {
+        return false
+    } catch (ex: Exception) {
+        throw IllegalStateException("exception while commiting & pushing", ex)
     }
 }

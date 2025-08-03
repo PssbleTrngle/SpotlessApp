@@ -1,14 +1,11 @@
 package com.possible_triangle.spotless
 
-import io.ktor.http.HttpStatusCode
+import io.ktor.http.*
 import io.ktor.server.application.*
-import io.ktor.server.config.property
-import io.ktor.server.request.header
-import io.ktor.server.request.receiveText
+import io.ktor.server.config.*
+import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.internal.readJson
 
 private val JSON = createJson()
 
@@ -37,6 +34,7 @@ private fun RoutingCall.eventType(): String {
 
 private suspend fun RoutingCall.decodeEvent(): IssueCommentEvent? {
     val body = receiveText()
+
     verifySecret(body)
 
     val eventType = eventType()
@@ -48,7 +46,11 @@ private suspend fun RoutingCall.decodeEvent(): IssueCommentEvent? {
 }
 
 private fun RoutingCall.verifySecret(body: String) {
-    val secret = application.property<String>("webhook.secret")
+    val secret = application.propertyOrNull<String>("webhook.secret") ?: run {
+        if (application.developmentMode) return
+        else error("webhook secret not defined")
+    }
+
     val received = request.header("x-hub-signature-256") ?: unauthorized("webhook secret missing")
 
     val expected = "sha256=${body.sha256(secret)}"
