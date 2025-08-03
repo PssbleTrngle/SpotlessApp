@@ -2,26 +2,20 @@ package com.possible_triangle.spotless
 
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
-import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.plugins.defaultRequest
-import io.ktor.client.request.accept
-import io.ktor.client.request.bearerAuth
-import io.ktor.client.request.get
-import io.ktor.client.request.header
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentType
-import io.ktor.http.contentType
-import io.ktor.http.userAgent
-import io.ktor.serialization.kotlinx.json.json
-import io.ktor.server.application.Application
-import io.ktor.server.application.log
-import io.ktor.server.config.property
+import io.ktor.client.*
+import io.ktor.client.call.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.*
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.request.*
+import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
+import io.ktor.server.application.*
+import io.ktor.server.config.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -66,12 +60,14 @@ data class PullRequestLink(
 data class Head(
     val ref: String,
     val sha: String,
+    val repo: Repository,
 )
 
 @Serializable
 data class PullRequest(
     val url: String,
     val head: Head,
+    val base: Head,
     @SerialName("author_association")
     val authorAssociation: AuthorAssociation,
     @SerialName("maintainer_can_modify")
@@ -80,6 +76,7 @@ data class PullRequest(
 
 @Serializable
 data class Repository(
+    val id: Id,
     @SerialName("clone_url")
     val cloneUrl: String,
     @SerialName("full_name")
@@ -90,7 +87,7 @@ data class Repository(
 data class Issue(
     val id: Id,
     @SerialName("pull_request")
-    val pr: PullRequestLink?,
+    val pr: PullRequestLink? = null,
     val state: IssueState,
 )
 
@@ -109,12 +106,35 @@ data class Installation(
 )
 
 @Serializable
+enum class CommentAction {
+    @SerialName("created")
+    CREATED,
+
+    @SerialName("edited")
+    EDITED,
+
+    @SerialName("deleted")
+    DELETED,
+}
+
+@Serializable
+data class ChangeMap(
+    val from: String
+)
+
+@Serializable
+data class CommentChanges(
+    val body: ChangeMap? = null
+)
+
+@Serializable
 data class IssueCommentEvent(
-    val action: String,
+    val action: CommentAction,
     val comment: Comment,
     val issue: Issue,
     val repository: Repository,
     val installation: Installation,
+    val changes: CommentChanges? = null,
 )
 
 val client = HttpClient(CIO) {
@@ -130,10 +150,12 @@ val client = HttpClient(CIO) {
     }
 }
 
-fun Application.githubUser(token: String): GitUser {
-    val name = "Spotless"
-    val email = "${property<String>("github.client.id")}+$name[bot]@users.noreply.github.com"
-    return GitUser(email, name, token)
+private val applicationName = "spotless-bot[bot]"
+
+private suspend fun githubUser(token: String): GitUser {
+    val user = client.get("users/${applicationName}").body<User>()
+    val email = "${user.id}+$applicationName@users.noreply.github.com"
+    return GitUser(email, applicationName, token)
 }
 
 fun Application.generateJWT(): String {
@@ -149,11 +171,18 @@ data class TokenResponse(
     val token: String,
 )
 
+private fun IssueCommentEvent.shouldRun(): Boolean {
+    if (action == CommentAction.DELETED) return false
+    val matchesCommand = comment.body.trim() == "/spotless"
+    if (action == CommentAction.CREATED) return matchesCommand
+    return matchesCommand && changes?.body?.from != comment.body
+}
+
 suspend fun Application.handleComment(event: IssueCommentEvent) {
     if (event.issue.pr == null) return
     log.debug("Received PR comment '${event.comment.body}' on ${event.issue.pr.url}")
 
-    if (event.comment.body.trim() != "/spotless") return log.debug(" not a command")
+    if (!event.shouldRun()) return log.debug(" not a command")
     if (event.issue.state != IssueState.OPEN) return log.debug(" already closed")
 
     val jwt = generateJWT()
@@ -166,29 +195,33 @@ suspend fun Application.handleComment(event: IssueCommentEvent) {
         bearerAuth(token)
     }.body<PullRequest>()
 
+    if (!pullRequest.maintainerCanModify && pullRequest.head.repo.id != pullRequest.base.repo.id) {
+        forbidden("pull request owner does not allow modifications by maintainers")
+    }
+
     val user = githubUser(token)
-    react(event.comment, event.repository, user, Reaction.EYES)
+    react(event.comment, event.repository, user, Emoji.EYES)
 
     launch(Dispatchers.IO) {
         val reference = "${event.repository.name}/${pullRequest.head.ref}"
         try {
             val committed = spotlessApply(event.repository, pullRequest.head, user)
             if (committed) {
-                react(event.comment, event.repository, user, Reaction.THUMBS_UP)
+                react(event.comment, event.repository, user, Emoji.THUMBS_UP)
                 log.info("done for $reference")
             } else {
-                react(event.comment, event.repository, user, Reaction.THUMBS_DOWN)
+                react(event.comment, event.repository, user, Emoji.THUMBS_DOWN)
                 log.info("no changes for $reference")
             }
         } catch (ex: Exception) {
             log.error("exception occured while handling $reference", ex)
-            react(event.comment, event.repository, user, Reaction.CONFUSED)
+            react(event.comment, event.repository, user, Emoji.CONFUSED)
         }
     }
 }
 
 @Serializable
-enum class Reaction {
+enum class Emoji {
     @SerialName("+1")
     THUMBS_UP,
 
@@ -207,10 +240,28 @@ enum class Reaction {
 
 @Serializable
 data class AddReaction(
-    val content: Reaction
+    val content: Emoji
 )
 
-suspend fun react(comment: Comment, repository: Repository, user: GitUser, reaction: Reaction) {
+@Serializable
+data class Reaction(
+    val id: Id,
+    val user: User,
+)
+
+suspend fun react(comment: Comment, repository: Repository, user: GitUser, reaction: Emoji) {
+    val existing = client.get("/repos/${repository.name}/issues/comments/${comment.id}/reactions") {
+        bearerAuth(user.token)
+    }.body<List<Reaction>>().filter {
+        it.user.login == applicationName
+    }
+
+    existing.asFlow().onEach {
+        client.delete("/repos/${repository.name}/issues/comments/${comment.id}/reactions/${it.id}") {
+            bearerAuth(user.token)
+        }
+    }.collect()
+
     client.post("/repos/${repository.name}/issues/comments/${comment.id}/reactions") {
         bearerAuth(user.token)
         setBody(AddReaction(reaction))
